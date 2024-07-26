@@ -210,11 +210,46 @@ public class SplatRenderer {
 
     private func buildPipelinesIfNeeded() throws {
         if renderPipelineState == nil {
-            renderPipelineState = try buildRenderPipeline()
+            renderPipelineState = try buildObjectRenderPipeline()
         }
         if depthState == nil {
             depthState = try buildDepthState()
         }
+    }
+
+    private func buildObjectRenderPipeline() throws -> any MTLRenderPipelineState {
+        let pipelineDescriptor = MTLMeshRenderPipelineDescriptor()
+
+        let library = device.makeDefaultLibrary()!
+        pipelineDescriptor.label = "MeshRenderPipeline"
+        pipelineDescriptor.meshFunction = library.makeRequiredFunction(name: "splatMeshShader")
+        pipelineDescriptor.fragmentFunction = library.makeRequiredFunction(name: "splatFragmentShader")
+        pipelineDescriptor.rasterSampleCount = sampleCount
+
+        let colorAttachment = pipelineDescriptor.colorAttachments[0]!
+        colorAttachment.pixelFormat = colorFormat
+        colorAttachment.isBlendingEnabled = true
+        colorAttachment.rgbBlendOperation = .add
+        colorAttachment.alphaBlendOperation = .add
+        if renderFrontToBack {
+            colorAttachment.sourceRGBBlendFactor = .oneMinusDestinationAlpha
+            colorAttachment.sourceAlphaBlendFactor = .oneMinusDestinationAlpha
+            colorAttachment.destinationRGBBlendFactor = .one
+            colorAttachment.destinationAlphaBlendFactor = .one
+        } else {
+            colorAttachment.sourceRGBBlendFactor = .one
+            colorAttachment.sourceAlphaBlendFactor = .one
+            colorAttachment.destinationRGBBlendFactor = .oneMinusSourceAlpha
+            colorAttachment.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        }
+        pipelineDescriptor.colorAttachments[0] = colorAttachment
+        pipelineDescriptor.depthAttachmentPixelFormat = depthFormat
+        pipelineDescriptor.stencilAttachmentPixelFormat = stencilFormat
+
+        pipelineDescriptor.maxVertexAmplificationCount = maxViewCount
+
+        let (pipelineState, _) = try device.makeRenderPipelineState(descriptor: pipelineDescriptor, options: [])
+        return pipelineState
     }
 
     private func buildRenderPipeline() throws -> MTLRenderPipelineState {
@@ -380,34 +415,17 @@ public class SplatRenderer {
                                           renderTargetArrayLength: renderTargetArrayLength,
                                           for: commandBuffer)
 
-        let indexCount = splatBuffer.count * 6
-        let indexBuffer = self.indexBuffer ?? device.makeBuffer(length: indexCount * MemoryLayout<UInt32>.size)!
-        if self.indexBuffer == nil {
-            let uint32Buffer = indexBuffer.contents().assumingMemoryBound(to: UInt32.self)
-            for i in 0..<splatBuffer.count {
-                uint32Buffer[i * 6 + 0] = UInt32(i * 4 + 0)
-                uint32Buffer[i * 6 + 1] = UInt32(i * 4 + 1)
-                uint32Buffer[i * 6 + 2] = UInt32(i * 4 + 2)
-                uint32Buffer[i * 6 + 3] = UInt32(i * 4 + 1)
-                uint32Buffer[i * 6 + 4] = UInt32(i * 4 + 2)
-                uint32Buffer[i * 6 + 5] = UInt32(i * 4 + 3)
-            }
-            self.indexBuffer = indexBuffer
-        }
-
         renderEncoder.pushDebugGroup("Draw Splat Model")
 
         renderEncoder.setRenderPipelineState(renderPipelineState)
         renderEncoder.setDepthStencilState(depthState)
 
-        renderEncoder.setVertexBuffer(dynamicUniformBuffers, offset: uniformBufferOffset, index: BufferIndex.uniforms.rawValue)
-        renderEncoder.setVertexBuffer(splatBuffer.buffer, offset: 0, index: BufferIndex.splat.rawValue)
+        renderEncoder.setMeshBuffer(dynamicUniformBuffers, offset: uniformBufferOffset, index: BufferIndex.uniforms.rawValue)
+        renderEncoder.setMeshBuffer(splatBuffer.buffer, offset: 0, index: BufferIndex.splat.rawValue)
 
-        renderEncoder.drawIndexedPrimitives(type: .triangle,
-                                            indexCount: indexCount,
-                                            indexType: .uint32,
-                                            indexBuffer: indexBuffer,
-                                            indexBufferOffset: 0)
+        renderEncoder.drawMeshThreads(MTLSizeMake(splatBuffer.count, 1, 1),
+                                      threadsPerObjectThreadgroup: MTLSizeMake(1, 1, 1),
+                                      threadsPerMeshThreadgroup: MTLSizeMake(1, 1, 1))
 
         renderEncoder.popDebugGroup()
         renderEncoder.endEncoding()
