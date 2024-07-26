@@ -420,10 +420,15 @@ public class SplatRenderer {
         renderEncoder.setRenderPipelineState(renderPipelineState)
         renderEncoder.setDepthStencilState(depthState)
 
+        let chunkSize = 64
+        let chunkCount = Int((Double(splatBuffer.count) / Double(chunkSize)).rounded(.up))
+        var total = UInt32(splatBuffer.count)
+
         renderEncoder.setMeshBuffer(dynamicUniformBuffers, offset: uniformBufferOffset, index: BufferIndex.uniforms.rawValue)
         renderEncoder.setMeshBuffer(splatBuffer.buffer, offset: 0, index: BufferIndex.splat.rawValue)
+        renderEncoder.setMeshBytes(&total, length: MemoryLayout<UInt32>.size, index: 2)
 
-        renderEncoder.drawMeshThreads(MTLSizeMake(splatBuffer.count, 1, 1),
+        renderEncoder.drawMeshThreads(MTLSizeMake(chunkCount, 1, 1),
                                       threadsPerObjectThreadgroup: MTLSizeMake(1, 1, 1),
                                       threadsPerMeshThreadgroup: MTLSizeMake(1, 1, 1))
 
